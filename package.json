@@ -1,0 +1,41 @@
+{
+    "name": "mx-ai",
+    "productName": "MX AI",
+    "version": "0.0.1",
+    "description": "MX AI is a desktop application for use and create custom AI models.",
+    "main": "src/app.js",
+    "author": {
+        "name": "Mewax07",
+        "email": "mewax07@gmail.com",
+        "url": "https://github.com/Mewax07"
+    },
+    "scripts": {
+        "start": "cross-env-shell NODE_ENV=dev electron .",
+        "dev": "cross-env-shell DEV_TOOL=open nodemon --exec npm run start",
+        "build": "node build.js --obf=true --build=platform"
+    },
+    "license": "Apache-2.0",
+    "nodemonConfig": {
+        "ext": "js,ts,html,css",
+        "ignore": "**/test"
+    },
+    "dependencies": {
+        "electron-updater": "6.6.2"
+    },
+    "devDependencies": {
+        "cross-env": "7.0.3",
+        "electron": "36.3.2",
+        "electron-builder": "26.0.12",
+        "javascript-obfuscator": "4.1.1",
+        "jimp": "0.22.12",
+        "nodemon": "3.1.10",
+        "png2icons": "2.0.1",
+        "prettier": "3.5.3",
+        "prettier-plugin-organize-imports": "4.1.0",
+        "prettier-plugin-sh": "0.17.4"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Mewax07/MX_AI.git"
+    }
+}
