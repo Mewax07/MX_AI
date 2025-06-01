@@ -3,6 +3,7 @@ build/
 dist/
 app/
 test/
+.vscode/
 *.log
 *.yml
 .env*
