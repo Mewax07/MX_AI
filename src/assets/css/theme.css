@@ -1,0 +1,43 @@
+.global {
+    --fd-layout-width: 100vw;
+    --fd-doc: calc(
+        min(100vw, var(--fd-layout-width)) - var(--fd-toc-width) -
+            var(--fd-sidebar-width)
+    );
+    --fd-sidebar-width: 260px;
+    --fd-toc-width: 240px;
+    --fd-c-toc: calc(50vw - var(--fd-doc) / 2);
+    --fd-c-sidebar: calc(50vw - var(--fd-doc) / 2);
+}
+
+.global .icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 94%;
+    --border: 0 0% 10%;
+    --card: 0 0% 10%;
+    --accent: 0 0% 12.9%;
+    --accent-c: 30 80% 32.9%;
+
+    /* AI Input Import */
+    --primary-color: #2e2e2e;
+    --neutral-color: #d3d3d3;
+}
+
+.light {
+    --background: 0 0% 80%;
+    --foreground: 0 0% 20%;
+    --border: 0 0% 85%;
+    --card: 0 0% 90%;
+    --accent: 0 0% 87.1%;
+    --accent-c: 30 80% 67.1%;
+
+    /* AI Input Import */
+    --primary-color: #d3d3d3;
+    --neutral-color: #2e2e2e;
+}
