@@ -6,12 +6,24 @@
 
 ## Fonctionnalités
 
-- [ ] Gestion des projets
-- [ ] Gestion des modèles
-- [ ] Gestion des images
-- [ ] Gestion des vidéos
-- [ ] Gestion des audios
-- [ ] Gestion des fichiers
+- [x] Connexion à un compte Google (API OAuth2)
+- [x] Gestion des mails (Service: Gmail)
+- [x] Server backend
+- [x] Interface utilisateur
+- [ ] Implementation d'un modèle d'IA
+  - [ ] Utilisation de `ollama`
+    - [ ] Téléchargement des modèles
+    - [x] Chargement des modèles
+    - [x] Génération de texte
+    - [ ] Streaming de texte
+    - [ ] Gestion des modèles
+    - [x] Gestion des prompts
+    - [x] Template de prompts
+    - [ ] Compatibilité avec les API
+      - [ ] API Gmail
+      - [x] API Web Search
+      - [ ] API Image Generation
+    - [ ] Compatibilité avec les extensions communautaire (marketplace)
 
 ---
 

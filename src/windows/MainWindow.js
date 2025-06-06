@@ -14,12 +14,8 @@ const appData = path.join(appDataRoaming, pkg.name);
 if (!fs.existsSync(appData)) fs.mkdirSync(appData);
 
 const rootDir = path.join(appData, "root");
-const workspaceDir = path.join(rootDir, "workspace");
-const conversationsDir = path.join(rootDir, "conversations");
 
 if (!fs.existsSync(rootDir)) fs.mkdirSync(rootDir);
-if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir);
-if (!fs.existsSync(conversationsDir)) fs.mkdirSync(conversationsDir);
 
 let resizeTimeout;
 let moveTimeout;

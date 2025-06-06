@@ -1,5 +1,8 @@
 const pkg = require("../../package.json");
 const { ipcRenderer } = require("electron");
+const Store = require("electron-store");
+const store = new Store();
+const WebSocket = require("ws");
 
 /**
  * Html Class is a utility for creating and manipulating DOM elements
@@ -501,10 +504,182 @@ class Logger {
     }
 }
 
-const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+class WsClient {
+    constructor(port) {
+        this.ws = new WebSocket(`ws://localhost:${port}`);
+        this.setupWebSocket();
+    }
+
+    setupWebSocket() {
+        this.ws.onopen = () => {
+            console.log("WebSocket connection established.");
+        };
+
+        this.ws.onmessage = (data) => {
+            if (data.type === "message") {
+                const message = JSON.parse(data.data);
+                console.log("Received message:", message);
+            }
+        };
+
+        this.ws.onclose = () => {
+            console.log("WebSocket connection closed.");
+        };
+    }
+
+    listDrafts() {
+        this.ws.send(JSON.stringify({ type: "listDrafts" }));
+    }
+
+    sendDraft(draftId) {
+        this.ws.send(JSON.stringify({ type: "sendDraft", draftId }));
+    }
+
+    listMessages() {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "listMessages" }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    sendEmail(emailData) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "sendEmail", emailData }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    getMessage(messageId) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "getMessage", messageId }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    searchMessages(query) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "searchMessages", query }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    listConversations() {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "listConversations" }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    getConversation(chatId) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "loadConversation", chatId }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    createConversation() {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "createConversation" }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+    sendMessage(chatId, message) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(
+                JSON.stringify({
+                    type: "sendMessage",
+                    chatId,
+                    message,
+                    tools: [
+                        app.get("ai-input-button-bar-left-inp-check-search").elm
+                            .checked
+                            ? "search"
+                            : "",
+                    ],
+                }),
+            );
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+}
+
+class Message {
+    constructor(content, timestamp, sender, chatId) {
+        this.content = content;
+        this.timestamp = timestamp;
+        this.sender = sender;
+        this.chatId = chatId;
+    }
+
+    getContent() {
+        return this.content;
+    }
+
+    getTimestamp() {
+        return this.timestamp;
+    }
+
+    getSender() {
+        return this.sender;
+    }
+
+    getChatId() {
+        return this.chatId;
+    }
+
+    formatChatMessage() {
+        const date = new Date(this.timestamp);
+        const hours = date.getHours();
+        const minutes = date.getMinutes();
+        const formattedTime = `${hours}:${minutes < 10 ? "0" : ""}${minutes}`;
+        // return `${formattedTime} - ${this.sender}: ${this.content}`;
+        const typeOf = typeof this.content;
+        let contentText = "";
+        if (typeOf === "string") {
+            contentText = this.content;
+        } else if (typeOf === "object") {
+            contentText = this.content.answer;
+        }
+        return {
+            type: "message",
+            data: {
+                text: contentText,
+                createdAt: this.timestamp,
+                id: this.chatId,
+                author: {
+                    role: this.sender,
+                },
+            },
+        };
+    }
+}
 
 class App {
     arrayElements = [];
+    chatModels = {
+        "Créer une image": "Transforme le prompt suivant en une image : ",
+        "Écrire et envoyer un email":
+            "Écris un email en suivant le prompt suivant : ",
+        "Donnez-moi des idées":
+            "Donne-moi des idées en suivant le prompt suivant : ",
+        "Planifier un voyage":
+            "Planifie un voyage en suivant le prompt suivant : ",
+        "Aidez-moi à choisir":
+            "Choisissez entre plusieurs options en suivant le prompt suivant : ",
+        "Écrire un script Python":
+            "Écris un script Python en suivant le prompt suivant : ",
+        "Résoudre le problème":
+            "Résoud le problème en suivant le prompt suivant : ",
+    };
     icons = {
         "panel-icon": `
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-panel-left">
@@ -515,18 +690,24 @@ class App {
     };
 
     async init() {
-        this.initLogs();
+        this.initClasses();
         await this.buildVanillaJS();
         await this.initFrame();
     }
 
-    initLogs() {
-        new Logger(pkg.name, {}).init();
+    initClasses() {
+        this.logger = new Logger(pkg.name, {}).init();
+        this.ws = new WsClient(process.env.PORT || 65440);
     }
 
     async buildVanillaJS() {
         console.log("Build vanilla JS");
 
+        /**
+         * Gets an element from the arrayElements array by name or index.
+         * @param {string|number} name - The name or index of the element to retrieve
+         * @returns {Html|null} The Html element if found, null otherwise
+         */
         this.get = (name) => {
             if (typeof name === "string") {
                 const found = this.arrayElements.find(
@@ -843,7 +1024,7 @@ class App {
                 .class("chat-marquee")
                 .appendTo(this.get("ai-input")),
         });
-        const chatGroup = await this.generateCode({
+        const chatGroup1 = await this.generateCode({
             html: new Html("ul").dataset({ key: "type", obj: "group" }),
             data: [
                 {
@@ -852,7 +1033,7 @@ class App {
             ],
             value: [],
         });
-        const ulElement = chatGroup[0];
+        const ulElement1 = chatGroup1[0];
         [
             "Créer une image",
             "Écrire et envoyer un email",
@@ -862,9 +1043,43 @@ class App {
             "Écrire un script Python",
             "Résoudre le problème",
         ].forEach((text) => {
-            ulElement.append(new Html("li").text(text));
+            ulElement1.append(
+                new Html("li").text(text).on("click", () => {
+                    const input = this.get("ai-input-chat-input");
+                    input.val(this.chatModels[text]);
+                    input.elm.focus();
+                }),
+            );
         });
-        this.get("ai-input-chat-marquee").appendMany(...chatGroup);
+        this.get("ai-input-chat-marquee").appendMany(...chatGroup1);
+        const chatGroup2 = await this.generateCode({
+            html: new Html("ul").dataset({ key: "type", obj: "group" }),
+            data: [
+                {
+                    textArr: [],
+                },
+            ],
+            value: [],
+        });
+        const ulElement2 = chatGroup2[0];
+        [
+            "Créer une image",
+            "Écrire et envoyer un email",
+            "Donnez-moi des idées",
+            "Planifier un voyage",
+            "Aidez-moi à choisir",
+            "Écrire un script Python",
+            "Résoudre le problème",
+        ].forEach((text) => {
+            ulElement2.append(
+                new Html("li").text(text).on("click", () => {
+                    const input = this.get("ai-input-chat-input");
+                    input.val(this.chatModels[text]);
+                    input.elm.focus();
+                }),
+            );
+        });
+        this.get("ai-input-chat-marquee").appendMany(...chatGroup2);
         this.arrayElements.push({
             name: "ai-input-chat-container",
             element: new Html()
@@ -1067,3 +1282,8 @@ class App {
 const app = new App();
 app.init();
 window.app = app;
+window.ipcRenderer = ipcRenderer;
+
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+
+window.delay = delay;

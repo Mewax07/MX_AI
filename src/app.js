@@ -1,27 +1,74 @@
 const { app, ipcMain, nativeTheme, globalShortcut } = require("electron");
 const { autoUpdater } = require("electron-updater");
 
+const Store = require("electron-store");
+
+const store = new Store();
+
+const { google } = require("googleapis");
+require("dotenv").config();
+
 const UpdateWindow = require("./windows/UpdateWindow.js");
 const MainWindow = require("./windows/MainWindow.js");
+const AuthWindow = require("./windows/AuthWindow.js");
+
+const oauth2Client = new google.auth.OAuth2(
+    process.env.CLIENT_ID,
+    process.env.CLIENT_SECRET,
+    `http://localhost:${process.env.PORT || 65440}/oauth2callback`,
+);
+
+const serverClass = require("./server/server.js");
+const server = new serverClass.Server();
+server.init(oauth2Client, process.env.PORT || 65440);
+
+const creditClass = require("./server/credit.js");
+const credit = new creditClass.Credit(store, oauth2Client);
 
 const mainWindow = new MainWindow();
+const authWindow = new AuthWindow(oauth2Client);
 
 let dev = process.env.NODE_ENV === "dev";
 
 if (!app.requestSingleInstanceLock()) {
     app.quit();
 } else {
-    app.whenReady().then(() => {
+    app.whenReady().then(async () => {
+        const client = await credit.authorize();
+        if (client) {
+            oauth2Client.setCredentials(client.credentials);
+        }
+
         if (dev) {
-            mainWindow.createWindow("src/render/index.html", true);
+            processApp();
         } else {
             UpdateWindow.createWindow();
         }
     });
 }
 
-ipcMain.on("main-window-open", () => {
+function processApp() {
+    const tokens = credit.loadTokens();
+    if (tokens) {
+        oauth2Client.setCredentials(tokens);
+        mainWindow.createWindow("src/render/index.html", true);
+    } else {
+        authWindow.createWindow();
+    }
+}
+
+oauth2Client.on("tokens", (tokens) => {
+    credit.saveTokens(tokens);
+    oauth2Client.setCredentials(tokens);
     mainWindow.createWindow("src/render/index.html", true);
+});
+
+ipcMain.on("main-window-open", () => {
+    processApp();
+});
+
+ipcMain.on("auth-window-open", () => {
+    authWindow.createWindow();
 });
 
 ipcMain.on("update-window-close", () => UpdateWindow.destroyWindow());
