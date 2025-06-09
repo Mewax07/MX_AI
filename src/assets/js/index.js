@@ -1,7 +1,5 @@
 const pkg = require("../../package.json");
 const { ipcRenderer } = require("electron");
-const Store = require("electron-store");
-const store = new Store();
 const WebSocket = require("ws");
 
 /**
@@ -506,18 +504,37 @@ class Logger {
 
 class WsClient {
     constructor(port) {
-        this.ws = new WebSocket(`ws://localhost:${port}`);
+        this.port = port;
+        this.ws = null;
+        this.callbacks = {};
+        this.connectionOpen = new Promise((resolve) => {
+            this.resolveConnectionOpen = resolve;
+        });
         this.setupWebSocket();
     }
 
+    waitForConnection() {
+        return this.connectionOpen;
+    }
+
     setupWebSocket() {
+        this.ws = new WebSocket(`ws://localhost:${this.port}`);
+
         this.ws.onopen = () => {
             console.log("WebSocket connection established.");
+            this.resolveConnectionOpen();
         };
 
-        this.ws.onmessage = (data) => {
-            if (data.type === "message") {
-                const message = JSON.parse(data.data);
+        this.ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+
+            if (this.callbacks[message.type]) {
+                this.callbacks[message.type](message);
+            } else {
+                console.log("No callback for message type:", message.type);
+            }
+
+            if (event.type === "message") {
                 console.log("Received message:", message);
             }
         };
@@ -525,6 +542,28 @@ class WsClient {
         this.ws.onclose = () => {
             console.log("WebSocket connection closed.");
         };
+    }
+
+    on(messageType, callback) {
+        this.callbacks[messageType] = callback;
+    }
+
+    off(messageType) {
+        delete this.callbacks[messageType];
+    }
+
+    on_callback(messageType, callback) {
+        if (typeof callback === "function") {
+            this.callbacks[messageType] = callback;
+        } else {
+            console.error("Callback is not a function");
+        }
+    }
+
+    off_callback(messageType) {
+        if (this.callbacks[messageType]) {
+            delete this.callbacks[messageType];
+        }
     }
 
     listDrafts() {
@@ -610,14 +649,358 @@ class WsClient {
             console.error("WebSocket is not connected.");
         }
     }
+
+    getDataChats() {
+        console.log("getDataChats called", this.ws.readyState);
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: "getDataChats" }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+}
+
+class MarkdownParser {
+    static parse(markdown) {
+        const lines = markdown.split("\n");
+
+        const htmlContent = [];
+        let inCodeBlock = false;
+        let codeLanguage = "";
+        let codeLines = [];
+        let inBlockquote = false;
+        let inCardList = false;
+        let inClosable = false;
+        let closableContent = [];
+
+        let inTabs = false;
+        let tabItems = [];
+        let currentTabContent = [];
+
+        const htmlHeaderContent = [];
+        let listIndentStack = [];
+
+        const closeOpenTags = () => {
+            while (listIndentStack.length > 0) {
+                htmlContent.push("</li></ul>");
+                listIndentStack.pop();
+            }
+            if (inBlockquote) {
+                htmlContent.push("</blockquote>");
+                inBlockquote = false;
+            }
+            if (inCardList) {
+                htmlContent.push("</div>");
+                inCardList = false;
+            }
+            if (inClosable) {
+                htmlContent.push("</ul></div>");
+                inClosable = false;
+            }
+            if (inTabs) {
+                htmlContent.push(currentTabContent.join("") + "</div></div>");
+                inTabs = false;
+                currentTabContent = [];
+            }
+        };
+
+        lines.forEach((line, index) => {
+            line = line
+                .replace(/`([^`]+)`/g, "<code>$1</code>")
+                .replace(
+                    /~~([^*]+)~~/g,
+                    "<span class='strikethrough-text'>$1</span>",
+                )
+                .replace(
+                    /\*\*([^*]+)\*\*/g,
+                    "<span class='bold-text'>$1</span>",
+                )
+                .replace(/\*([^*]+)\*/g, "<span class='italic-text'>$1</span>");
+
+            line = line.replace(
+                /\[([^\]]+)\]\(([^)]+)\)/g,
+                "<a href='$2' target='_blank'>$1</a>",
+            );
+
+            const indent = line.search(/\S/);
+            const isListItem = line.trim().startsWith("- ");
+
+            if (isListItem) {
+                const content = line.trim().replace(/^-/, "").trim();
+
+                while (
+                    listIndentStack.length > 0 &&
+                    listIndentStack[listIndentStack.length - 1] >= indent
+                ) {
+                    htmlContent.push("</li></ul>");
+                    listIndentStack.pop();
+                }
+
+                if (
+                    listIndentStack.length === 0 ||
+                    listIndentStack[listIndentStack.length - 1] < indent
+                ) {
+                    htmlContent.push("<ul><li>");
+                    listIndentStack.push(indent);
+                } else {
+                    htmlContent.push("</li><li>");
+                }
+
+                htmlContent.push(`${content}`);
+                return;
+            }
+
+            const closableMatch = /\[(Closable:.*?)\]/.exec(line.trim());
+            if (closableMatch) {
+                closeOpenTags();
+                const params = closableMatch[1].split(": ")[1].split(" ");
+                const attributes = {};
+                for (const param of params) {
+                    const match = param.match(/(\w+)='(.*?)'/);
+                    if (match) {
+                        attributes[match[1]] = match[2];
+                    }
+                }
+
+                const title = attributes.title || "";
+                htmlContent.push(
+                    `<div class="closable" onclick="this.classList.toggle('active')" ${Object.entries(
+                        attributes,
+                    )
+                        .map(([key, val]) => `${key}='${val}'`)
+                        .join(" ")}><h3>${title}</h3><ul>`,
+                );
+                inClosable = true;
+                return;
+            } else if (inClosable && line.trim() === "") {
+                closeOpenTags();
+            } else if (inClosable) {
+                closableContent.push(line);
+                return;
+            }
+
+            const cardMatch = /\[(Card:.*?)\]/.exec(line.trim());
+            if (cardMatch) {
+                const params = cardMatch[1].split(": ")[1].split(" ");
+                if (!inCardList) {
+                    closeOpenTags();
+                    htmlContent.push("<div class='card-list'>");
+                    inCardList = true;
+                }
+                htmlContent.push(this.parseBlock("Card", params, line));
+                return;
+            }
+
+            const tabsMatch = /\[Tabs: items=\{(.*?)\}\]/.exec(line.trim());
+            if (tabsMatch) {
+                closeOpenTags();
+                tabItems = tabsMatch[1]
+                    .split(",")
+                    .map((item) => item.trim().replace(/'/g, ""));
+                htmlContent.push(
+                    `<div class="tabs"><div class="tab-buttons">${tabItems
+                        .map(
+                            (item, i) =>
+                                `<button class="tab-button${i === 0 ? " active" : ""}" onclick="showTab(this, '${item}')">${item}</button>`,
+                        )
+                        .join("")}</div><div class="tab-content">`,
+                );
+                inTabs = true;
+                return;
+            } else if (inTabs && line.trim().startsWith("```")) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    const codeMeta = line.replace("```", "").trim();
+                    codeLanguage = codeMeta.split(" ")[0].trim();
+
+                    const tabAttr = codeMeta.match(/tab="(.*?)"/);
+                    if (tabAttr) {
+                        const tabName = tabAttr[1];
+                        currentTabContent.push(
+                            `<div class="tab-pane" id="${tabName}" style="${currentTabContent.length === 0 ? "display:block" : "display:none"}"><button class="copy-button" onclick="copyCode(this);"><div class="icon"><i class="fa-regular fa-clone"></i></div></button><pre><code class="codeblock" data-lang="${codeLanguage}">`,
+                        );
+                    }
+                } else {
+                    inCodeBlock = false;
+                    currentTabContent.push(
+                        `${this.highlight(codeLines.join("\n"), codeLanguage)}</code></pre></div>`,
+                    );
+                    codeLines = [];
+                }
+                return;
+            } else if (inTabs && inCodeBlock) {
+                codeLines.push(line);
+                return;
+            } else if (inTabs && line.trim() === "") {
+                return;
+            }
+
+            const headingMatch = /^(#{1,6})\s*(.*)$/.exec(line.trim());
+            if (headingMatch) {
+                closeOpenTags();
+                const level = headingMatch[1].length - 1;
+                const text = headingMatch[2].trim();
+                htmlHeaderContent.push({ level, line: index, text });
+                htmlContent.push(
+                    `<h${level + 1} id="${index + text}">${text}</h${level + 1}>`,
+                );
+                return;
+            }
+
+            if (/^\|.*\|$/.test(line)) {
+                const isSeparator = /^\|\s*-+\s*\|/.test(
+                    lines[index + 1] || "",
+                );
+                if (isSeparator) {
+                    closeOpenTags();
+                    const headers = line
+                        .split("|")
+                        .slice(1, -1)
+                        .map((cell) => `<th>${cell.trim()}</th>`);
+                    htmlContent.push(
+                        "<table><thead><tr>" +
+                            headers.join("") +
+                            "</tr></thead><tbody>",
+                    );
+
+                    let i = index + 2;
+                    while (i < lines.length && /^\|.*\|$/.test(lines[i])) {
+                        const rowCells = lines[i]
+                            .split("|")
+                            .slice(1, -1)
+                            .map((cell) => `<td>${cell.trim()}</td>`);
+                        htmlContent.push("<tr>" + rowCells.join("") + "</tr>");
+                        i++;
+                    }
+
+                    htmlContent.push("</tbody></table>");
+                    lines.splice(index, i - index);
+                    return;
+                }
+            }
+
+            if (line.trim().startsWith("```")) {
+                if (inCodeBlock) {
+                    htmlContent.push(
+                        `<div dir="ltr" class="code-content"><button class="copy-button" onclick="copyCode(this)"><div class="icon"><i class="fa-regular fa-clone"></i></div></button><pre><code class="codeblock" data-lang="${codeLanguage}">${this.highlight(
+                            codeLines.join("\n"),
+                            codeLanguage,
+                        )}</code></pre></div>`,
+                    );
+                    inCodeBlock = false;
+                    codeLines = [];
+                } else {
+                    codeLanguage = line.replace("```", "").trim();
+                    inCodeBlock = true;
+                }
+                return;
+            } else if (inCodeBlock) {
+                codeLines.push(line);
+                return;
+            }
+
+            if (line.trim().startsWith(">")) {
+                if (!inBlockquote) {
+                    htmlContent.push("<blockquote>");
+                    inBlockquote = true;
+                }
+                htmlContent.push(`<p>${line.replace(/^>\s*/, "")}</p>`);
+                return;
+            }
+
+            if (/^(\*\s*\*\s*\*|-\s*-\s*-|_\s*_\s*)$/.test(line.trim())) {
+                closeOpenTags();
+                htmlContent.push("<hr>");
+                return;
+            }
+
+            if (line.trim().length > 0) {
+                if (line.trim().startsWith("\n")) {
+                    htmlContent.push("<br>");
+                }
+                closeOpenTags();
+                htmlContent.push(`<p>${line}</p>`);
+            }
+        });
+
+        if (inClosable) {
+            htmlContent.push(
+                ...closableContent.map((content) => `<p>${content}</p>`),
+            );
+            htmlContent.push("</div>");
+        }
+
+        closeOpenTags();
+        return htmlContent;
+    }
+
+    static highlight(text, language) {
+        if (!Prism.languages[language]) {
+            language = "plaintext";
+        }
+
+        try {
+            const highlighted = Prism.highlight(
+                text,
+                Prism.languages[language],
+                language,
+            );
+
+            return highlighted
+                .split("\n")
+                .map((line) => `<span class="line">${line}</span>`)
+                .join("\n");
+        } catch (error) {
+            console.error("Highlighting error:", error);
+            return text
+                .split("\n")
+                .map((line) => `<span class="line">${line}</span>`)
+                .join("\n");
+        }
+    }
+
+    static parseBlock(typeBlock, params, line) {
+        let attributes = {};
+
+        const attributeRegex = /(\w+)='([^']*)'/g;
+        let match;
+        while ((match = attributeRegex.exec(params)) !== null) {
+            const [, key, value] = match;
+            attributes[key] = value;
+        }
+
+        switch (typeBlock) {
+            case "Card":
+                const title = attributes.title ? attributes.title : "Err";
+                return `<a class="card" ${Object.entries(attributes)
+                    .map(([key, value]) => `${key}='${value}'`)
+                    .join(" ")}>${title}</a>`;
+
+            case "Date":
+                const date = attributes.date
+                    ? attributes.date.replaceAll(",", " ")
+                    : "Err";
+                return `<li><span>${
+                    line.split(new RegExp(/ \/\[(Date:.*?)\]/).exec(line)[0])[0]
+                }</span><div class="date">${date}</div></li>`;
+
+            default:
+                return `<div class="${typeBlock}" ${Object.entries(attributes)
+                    .map(([key, value]) => `${key}='${value}'`)
+                    .join(" ")}>${Object.entries(attributes)
+                    .map(([key, value]) => `${key}='${value}'`)
+                    .join(" ")}</div>`;
+        }
+    }
 }
 
 class Message {
-    constructor(content, timestamp, sender, chatId) {
+    constructor(content, timestamp, sender, chatId, username) {
         this.content = content;
         this.timestamp = timestamp;
         this.sender = sender;
         this.chatId = chatId;
+        this.username = username;
     }
 
     getContent() {
@@ -636,12 +1019,15 @@ class Message {
         return this.chatId;
     }
 
+    getUsername() {
+        return this.username;
+    }
+
     formatChatMessage() {
         const date = new Date(this.timestamp);
         const hours = date.getHours();
         const minutes = date.getMinutes();
         const formattedTime = `${hours}:${minutes < 10 ? "0" : ""}${minutes}`;
-        // return `${formattedTime} - ${this.sender}: ${this.content}`;
         const typeOf = typeof this.content;
         let contentText = "";
         if (typeOf === "string") {
@@ -656,10 +1042,141 @@ class Message {
                 createdAt: this.timestamp,
                 id: this.chatId,
                 author: {
+                    username: this.username,
                     role: this.sender,
                 },
+                time: formattedTime,
             },
         };
+    }
+
+    generateHtml(parsedContent) {
+        const messageContainer = new Html()
+            .class(
+                parsedContent.data.author.role === "user"
+                    ? "user-message"
+                    : "assistant-message",
+                "message",
+            )
+            .append(
+                parsedContent.data.author.role === "assistant"
+                    ? new Html()
+                          .class("profile-info")
+                          .appendMany(
+                              new Html("img").src("https://placehold.co/30"),
+                              new Html("span").text(
+                                  parsedContent.data.author.username,
+                              ),
+                          )
+                    : new Html()
+                          .class("profile-info")
+                          .append(
+                              new Html("span").text(
+                                  parsedContent.data.author.username,
+                              ),
+                          ),
+            )
+            .append(
+                new Html()
+                    .class("content-msg")
+                    .append(
+                        new Html()
+                            .class("content")
+                            .append(
+                                new Html("p").html(
+                                    MarkdownParser.parse(
+                                        parsedContent.data.text,
+                                    ).join("\n"),
+                                ),
+                            ),
+                    )
+                    .append(
+                        new Html()
+                            .class("infos")
+                            .append(
+                                new Html("span").text(parsedContent.data.time),
+                            )
+                            .append(
+                                parsedContent.data.author.role === "assistant"
+                                    ? new Html()
+                                          .class("actions")
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-light",
+                                                          "fa-thumbs-up",
+                                                      ),
+                                                  ),
+                                          )
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-light",
+                                                          "fa-thumbs-down",
+                                                      ),
+                                                  ),
+                                          )
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-regular",
+                                                          "fa-redo",
+                                                      ),
+                                                  ),
+                                          )
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-regular",
+                                                          "fa-clone",
+                                                      ),
+                                                  ),
+                                          )
+                                    : new Html()
+                                          .class("actions")
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-regular",
+                                                          "fa-pen-to-square",
+                                                      ),
+                                                  ),
+                                          )
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-regular",
+                                                          "fa-trash",
+                                                      ),
+                                                  ),
+                                          )
+                                          .append(
+                                              new Html()
+                                                  .class("icon")
+                                                  .append(
+                                                      new Html("i").class(
+                                                          "fa-regular",
+                                                          "fa-clone",
+                                                      ),
+                                                  ),
+                                          ),
+                            ),
+                    ),
+            );
+
+        return messageContainer;
     }
 }
 
@@ -691,6 +1208,7 @@ class App {
 
     async init() {
         this.initClasses();
+        await this.ws.waitForConnection();
         await this.buildVanillaJS();
         await this.initFrame();
     }
@@ -905,6 +1423,12 @@ class App {
                 .appendTo(this.get("main-ctn")),
         });
         this.arrayElements.push({
+            name: "main-content-center",
+            element: new Html()
+                .class("main-content-center")
+                .appendTo(this.get("main-content")),
+        });
+        this.arrayElements.push({
             name: "section-navbar",
             element: new Html("section")
                 .class("navbar")
@@ -1029,6 +1553,7 @@ class App {
             data: [
                 {
                     textArr: [],
+                    id: "chat-group-1",
                 },
             ],
             value: [],
@@ -1057,6 +1582,7 @@ class App {
             data: [
                 {
                     textArr: [],
+                    id: "chat-group-2",
                 },
             ],
             value: [],
@@ -1209,6 +1735,181 @@ class App {
         });
     }
 
+    async openChat(chatId) {
+        const chatData = await this.fetchChatData(chatId);
+        this.displayChatMessages(chatData);
+    }
+
+    async fetchChatData(chatId) {
+        return new Promise((resolve) => {
+            const callback = (data) => {
+                if (data.type === "readConversationResponse") {
+                    this.ws.off_callback("readConversationResponse", callback);
+                    resolve(data.data);
+                }
+            };
+            this.ws.on_callback("readConversationResponse", callback);
+            this.ws.ws.send(
+                JSON.stringify({ type: "readConversation", chatId }),
+            );
+        });
+    }
+
+    displayChatMessages(messages) {
+        const chatDisplayArea = this.get("main-content-center");
+        chatDisplayArea.html("");
+
+        this.get("ai-input").cleanup();
+
+        messages.content.forEach((message) => {
+            const parsedMessage = new Message(
+                message.content,
+                message.timestamp,
+                message.role,
+                messages.id,
+                message.role === "user" ? "Mewax07" : messages.llm || "Mistral",
+            );
+
+            const messageElement = parsedMessage.generateHtml(
+                parsedMessage.formatChatMessage(),
+            );
+            chatDisplayArea.append(messageElement);
+        });
+
+        // this.get("ai-input").appendTo(this.get("main-content-center"));
+        const chatContainer = this.get("main-content-center");
+        const scrollHeight = chatContainer.elm.scrollHeight;
+        chatContainer.elm.scrollTo({
+            top: scrollHeight,
+            behavior: "smooth",
+        });
+    }
+
+    async generateSideMiddleCtn(data) {
+        const groupItemTemplate = new Html("li")
+            .dataset({ key: "type", obj: "menuItem" })
+            .class("group-item")
+            .append(
+                new Html("div")
+                    .class("group-name")
+                    .append(new Html("span").text("[{title}]"))
+                    .append(
+                        new Html("div")
+                            .class("icon")
+                            .append(
+                                new Html("i").class(
+                                    "fa-regular",
+                                    "fa-chevron-up",
+                                ),
+                            ),
+                    ),
+            )
+            .append(
+                new Html("div").class("chats").append(
+                    new Html("ul")
+                        .dataset({ key: "sidebar", obj: "chat" })
+                        .dataset({ key: "type", obj: "group" })
+                        .append(
+                            new Html("li").class("group-item").append(
+                                new Html("a")
+                                    .dataset({ key: "href", obj: "[{href}]" })
+                                    .class("li-item")
+                                    .append(
+                                        new Html("span").text("[{chatTitle}]"),
+                                    )
+                                    .append(
+                                        new Html("div")
+                                            .class("icon")
+                                            .append(
+                                                new Html("i").class(
+                                                    "fa-regular",
+                                                    "fa-ellipsis",
+                                                ),
+                                            ),
+                                    ),
+                            ),
+                        ),
+                ),
+            );
+
+        const generatedElements = await Promise.all(
+            data.map(async (group) => {
+                if (group.chats.length === 0) {
+                    return null;
+                } else {
+                    const groupElement = new Html("li")
+                        .dataset({ key: "type", obj: "menuItem" })
+                        .class("group-item")
+                        .append(
+                            new Html("div")
+                                .class("group-name")
+                                .append(new Html("span").text(group.title))
+                                .append(
+                                    new Html("div")
+                                        .class("icon")
+                                        .append(
+                                            new Html("i").class(
+                                                "fa-regular",
+                                                "fa-chevron-up",
+                                            ),
+                                        ),
+                                ),
+                        )
+                        .append(
+                            new Html("div").class("chats").append(
+                                new Html("ul")
+                                    .dataset({
+                                        key: "sidebar",
+                                        obj: "chat",
+                                    })
+                                    .dataset({ key: "type", obj: "group" }),
+                            ),
+                        );
+
+                    const chatElements = await Promise.all(
+                        group.chats.map((chat) => {
+                            const chatTemplate = new Html("li")
+                                .class("group-item")
+                                .append(
+                                    new Html("a")
+                                        .on("click", (event) => {
+                                            event.preventDefault();
+                                            this.openChat(chat.id);
+                                        })
+                                        .class("li-item")
+                                        .append(
+                                            new Html("span").text(chat.title),
+                                        )
+                                        .append(
+                                            new Html("div")
+                                                .class("icon")
+                                                .append(
+                                                    new Html("i").class(
+                                                        "fa-regular",
+                                                        "fa-ellipsis",
+                                                    ),
+                                                ),
+                                        ),
+                                );
+                            return chatTemplate;
+                        }),
+                    );
+
+                    groupElement.qs("ul").appendMany(...chatElements);
+                    return groupElement;
+                }
+            }),
+        );
+
+        const sideMiddleUlCtn = new Html("ul").dataset({
+            key: "type",
+            obj: "group",
+        });
+        sideMiddleUlCtn.appendMany(...generatedElements);
+
+        this.get("side-middle-ctn").append(sideMiddleUlCtn);
+    }
+
     async generateAiInputLabel({ for: forId, icons, parentId = "ai-input" }) {
         console.log("Generate AI Input Label");
 
@@ -1276,6 +1977,12 @@ class App {
                 !isDarkTheme ? "theme-icon-sun" : "theme-icon-moon",
             ).classOff("actived");
         });
+
+        this.ws.on("dataChats", async (data) => {
+            await this.generateSideMiddleCtn(data.data);
+        });
+
+        this.ws.getDataChats();
     }
 }
 
@@ -1287,3 +1994,45 @@ window.ipcRenderer = ipcRenderer;
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 window.delay = delay;
+
+window.copyCode = (elm) => {
+    navigator.clipboard
+        .writeText(elm.parentElement.children[1].firstChild.textContent)
+        .then(
+            function () {
+                console.log("Async: Copying to clipboard was successful!");
+                elm.firstChild.firstChild.classList.toggle("fa-clone");
+                elm.firstChild.firstChild.classList.toggle("fa-check");
+                setTimeout(() => {
+                    elm.firstChild.firstChild.classList.toggle("fa-clone");
+                    elm.firstChild.firstChild.classList.toggle("fa-check");
+                }, 500);
+            },
+            function (err) {
+                elm.firstChild.firstChild.classList.toggle("fa-clone");
+                elm.firstChild.firstChild.classList.toggle(
+                    "fa-triangle-exclamation",
+                );
+                setTimeout(() => {
+                    elm.firstChild.firstChild.classList.toggle("fa-clone");
+                    elm.firstChild.firstChild.classList.toggle(
+                        "fa-triangle-exclamation",
+                    );
+                }, 500);
+                console.error("Async: Could not copy text: ", err);
+            },
+        );
+};
+
+window.showTab = (button, tabName) => {
+    const tabButtons = button.parentElement.children;
+    const tabPanes = button.parentElement.nextElementSibling.children;
+
+    for (let i = 0; i < tabButtons.length; i++) {
+        tabButtons[i].classList.remove("active");
+        tabPanes[i].style.display = "none";
+    }
+
+    button.classList.add("active");
+    document.getElementById(tabName).style.display = "block";
+};

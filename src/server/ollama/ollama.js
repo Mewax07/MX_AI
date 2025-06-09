@@ -4,12 +4,7 @@ const fs = require("fs");
 const pkg = require("../../../package.json");
 const { ConversationSummaryBufferMemory } = require("langchain/memory");
 const { ConversationChain } = require("langchain/chains");
-const {
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    MessagesPlaceholder,
-    HumanMessagePromptTemplate,
-} = require("@langchain/core/prompts");
+const { ChatPromptTemplate } = require("@langchain/core/prompts");
 const {
     CheerioWebBaseLoader,
 } = require("@langchain/community/document_loaders/web/cheerio");
@@ -149,6 +144,19 @@ Réponse:
                 model: conversationData.llm,
             }),
         };
+    }
+
+    async readConversation(chatId) {
+        console.log("ChatId:", chatId);
+        const filePath = path.join(conversationsDir, `${chatId}.json`);
+        if (!fs.existsSync(filePath)) {
+            throw new Error("Conversation non trouvée");
+        }
+
+        const fileData = fs.readFileSync(filePath, "utf8");
+        const conversationData = JSON.parse(fileData);
+
+        return conversationData;
     }
 
     async loadConversation(chatId) {

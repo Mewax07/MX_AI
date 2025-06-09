@@ -2,6 +2,8 @@ const express = require("express");
 const WebSocket = require("ws");
 const { google } = require("googleapis");
 const { Ollama } = require("./ollama/ollama");
+const fs = require("fs");
+const path = require("path");
 
 class Server {
     constructor() {
@@ -147,6 +149,16 @@ class Server {
                                 }),
                             );
                             break;
+                        case "readConversation":
+                            const conversation =
+                                await this.ollama.readConversation(data.chatId);
+                            ws.send(
+                                JSON.stringify({
+                                    type: "readConversationResponse",
+                                    data: conversation,
+                                }),
+                            );
+                            break;
                         case "sendMessage":
                             const response =
                                 await this.ollama.addMessageToConversation(
@@ -159,6 +171,15 @@ class Server {
                                 JSON.stringify({
                                     type: "messageResponse",
                                     data: response,
+                                }),
+                            );
+                            break;
+                        case "getDataChats":
+                            const dataChats = await this.getDataChats();
+                            ws.send(
+                                JSON.stringify({
+                                    type: "dataChats",
+                                    data: dataChats,
                                 }),
                             );
                             break;
@@ -258,6 +279,90 @@ class Server {
             q: query,
         });
         return response.data;
+    }
+
+    async getDataChats() {
+        try {
+            const files = fs.readdirSync(
+                this.ollama.getDirectories().conversationsDir,
+            );
+            const jsonFiles = files.filter((file) => file.endsWith(".json"));
+
+            const today = new Date();
+            const lastDay = new Date(today);
+            lastDay.setDate(today.getDate() - 1);
+            const sevenDaysAgo = new Date(today);
+            sevenDaysAgo.setDate(today.getDate() - 7);
+            const thirtyDaysAgo = new Date(today);
+            thirtyDaysAgo.setDate(today.getDate() - 30);
+
+            const todayChats = [];
+            const lastDayChats = [];
+            const sevenDaysChats = [];
+            const thirtyDaysChats = [];
+            const olderChats = [];
+
+            jsonFiles.forEach((file) => {
+                const filePath = path.join(
+                    this.ollama.getDirectories().conversationsDir,
+                    file,
+                );
+                const fileContent = fs.readFileSync(filePath, "utf8");
+                const chatData = JSON.parse(fileContent);
+
+                const lastDate = new Date(chatData.lastDate);
+
+                if (lastDate >= new Date(today.setHours(0, 0, 0, 0))) {
+                    todayChats.push(chatData);
+                } else if (lastDate >= new Date(lastDay.setHours(0, 0, 0, 0))) {
+                    lastDayChats.push(chatData);
+                } else if (
+                    lastDate >= new Date(sevenDaysAgo.setHours(0, 0, 0, 0))
+                ) {
+                    sevenDaysChats.push(chatData);
+                } else if (
+                    lastDate >= new Date(thirtyDaysAgo.setHours(0, 0, 0, 0))
+                ) {
+                    thirtyDaysChats.push(chatData);
+                } else {
+                    olderChats.push(chatData);
+                }
+            });
+
+            return [
+                {
+                    title: "Aujourd'hui",
+                    chats: todayChats,
+                },
+                {
+                    title: "Hier",
+                    chats: lastDayChats,
+                },
+                {
+                    title: "Les 7 derniers jours",
+                    chats: sevenDaysChats,
+                },
+                {
+                    title: "Les 30 derniers jours",
+                    chats: thirtyDaysChats,
+                },
+                {
+                    title: "Plus anciens",
+                    chats: olderChats,
+                },
+            ];
+        } catch (error) {
+            console.error("Error reading conversation files:", error);
+            return [
+                {
+                    title: "Error",
+                    description: "Error reading conversation files",
+                    icon: "error",
+                    color: "red",
+                    data: [],
+                },
+            ];
+        }
     }
 
     initRoutes() {
