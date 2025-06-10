@@ -1045,12 +1045,16 @@ class Message {
                     username: this.username,
                     role: this.sender,
                 },
-                time: formattedTime,
+                time: {
+                    formated: formattedTime,
+                    timestamp: this.timestamp,
+                },
             },
         };
     }
 
     generateHtml(parsedContent) {
+        console.log("parsedContent", parsedContent);
         const messageContainer = new Html()
             .class(
                 parsedContent.data.author.role === "user"
@@ -1094,7 +1098,21 @@ class Message {
                         new Html()
                             .class("infos")
                             .append(
-                                new Html("span").text(parsedContent.data.time),
+                                new Html("span")
+                                    .attr({
+                                        "data-title": new Date(
+                                            parsedContent.data.time.timestamp,
+                                        )
+                                            .toLocaleDateString("fr-FR", {
+                                                day: "numeric",
+                                                month: "short",
+                                                hour: "2-digit",
+                                                minute: "2-digit",
+                                                hour12: false,
+                                            })
+                                            .replace(/\s+/g, " "),
+                                    })
+                                    .text(parsedContent.data.time.formated),
                             )
                             .append(
                                 parsedContent.data.author.role === "assistant"
@@ -1103,6 +1121,9 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title": "J'aime",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-light",
@@ -1113,6 +1134,10 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title":
+                                                          "Je n'aime pas",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-light",
@@ -1123,6 +1148,9 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title": "Refaire",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-regular",
@@ -1133,6 +1161,9 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title": "Copier",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-regular",
@@ -1145,6 +1176,9 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title": "Modifier",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-regular",
@@ -1155,6 +1189,9 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title": "Supprimer",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-regular",
@@ -1165,6 +1202,9 @@ class Message {
                                           .append(
                                               new Html()
                                                   .class("icon")
+                                                  .attr({
+                                                      "data-title": "Copier",
+                                                  })
                                                   .append(
                                                       new Html("i").class(
                                                           "fa-regular",
@@ -1205,6 +1245,9 @@ class App {
             </svg>
         `,
     };
+    currentChat = null;
+    contentStreamed = null;
+    lastMessageElement = null;
 
     async init() {
         this.initClasses();
@@ -1736,8 +1779,9 @@ class App {
     }
 
     async openChat(chatId) {
+        this.currentChat = chatId;
         const chatData = await this.fetchChatData(chatId);
-        this.displayChatMessages(chatData);
+        await this.displayChatMessages(chatData);
     }
 
     async fetchChatData(chatId) {
@@ -1755,7 +1799,7 @@ class App {
         });
     }
 
-    displayChatMessages(messages) {
+    async displayChatMessages(messages) {
         const chatDisplayArea = this.get("main-content-center");
         chatDisplayArea.html("");
 
@@ -1776,7 +1820,13 @@ class App {
             chatDisplayArea.append(messageElement);
         });
 
-        // this.get("ai-input").appendTo(this.get("main-content-center"));
+        this.get("ai-input")
+            .classOn("static")
+            .appendTo(this.get("main-content"));
+        this.get("generated-chat-group-1").cleanup();
+        this.get("generated-chat-group-2").cleanup();
+
+        await delay(100);
         const chatContainer = this.get("main-content-center");
         const scrollHeight = chatContainer.elm.scrollHeight;
         chatContainer.elm.scrollTo({
@@ -1785,53 +1835,49 @@ class App {
         });
     }
 
-    async generateSideMiddleCtn(data) {
-        const groupItemTemplate = new Html("li")
-            .dataset({ key: "type", obj: "menuItem" })
-            .class("group-item")
-            .append(
-                new Html("div")
-                    .class("group-name")
-                    .append(new Html("span").text("[{title}]"))
-                    .append(
-                        new Html("div")
-                            .class("icon")
-                            .append(
-                                new Html("i").class(
-                                    "fa-regular",
-                                    "fa-chevron-up",
-                                ),
-                            ),
-                    ),
-            )
-            .append(
-                new Html("div").class("chats").append(
-                    new Html("ul")
-                        .dataset({ key: "sidebar", obj: "chat" })
-                        .dataset({ key: "type", obj: "group" })
-                        .append(
-                            new Html("li").class("group-item").append(
-                                new Html("a")
-                                    .dataset({ key: "href", obj: "[{href}]" })
-                                    .class("li-item")
-                                    .append(
-                                        new Html("span").text("[{chatTitle}]"),
-                                    )
-                                    .append(
-                                        new Html("div")
-                                            .class("icon")
-                                            .append(
-                                                new Html("i").class(
-                                                    "fa-regular",
-                                                    "fa-ellipsis",
-                                                ),
-                                            ),
-                                    ),
-                            ),
-                        ),
-                ),
-            );
+    async displayStreamedMessage(content) {
+        const chatDisplayArea = this.get("main-content-center");
+        if (!chatDisplayArea) {
+            console.error("Chat display area not found");
+            return;
+        }
 
+        if (!this.contentStreamed) {
+            this.contentStreamed = "";
+        }
+
+        this.contentStreamed += content;
+
+        const parsedMessage = new Message(
+            this.contentStreamed,
+            new Date().toISOString(),
+            "assistant",
+            this.currentChat,
+            "Mistral",
+        );
+
+        const messageElement = parsedMessage.generateHtml(
+            parsedMessage.formatChatMessage(),
+        );
+
+        if (!this.lastMessageElement) {
+            chatDisplayArea.append(messageElement);
+        } else {
+            try {
+                this.lastMessageElement.cleanup();
+                this.get("main-content-center").append(messageElement);
+            } catch (error) {
+                console.error("Error replacing message element:", error);
+                return;
+            }
+        }
+
+        this.lastMessageElement = messageElement;
+
+        chatDisplayArea.scrollTop = chatDisplayArea.scrollHeight;
+    }
+
+    async generateSideMiddleCtn(data) {
         const generatedElements = await Promise.all(
             data.map(async (group) => {
                 if (group.chats.length === 0) {
@@ -1907,6 +1953,7 @@ class App {
         });
         sideMiddleUlCtn.appendMany(...generatedElements);
 
+        this.get("side-middle-ctn").clear();
         this.get("side-middle-ctn").append(sideMiddleUlCtn);
     }
 
@@ -1923,6 +1970,26 @@ class App {
             .appendTo(this.get(parentId));
 
         return label;
+    }
+
+    async sendMessage(inputMsg) {
+        console.log("Send message");
+
+        if (this.currentChat) {
+            console.log("Chat found:", this.currentChat);
+            this.ws.sendMessage(this.currentChat, inputMsg);
+            await delay(100);
+            await this.openChat(this.currentChat);
+        } else {
+            const id = inputMsg
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "_")
+                .replace(/^_+|_+$/g, "");
+            console.log("No chat found", id);
+            this.ws.sendMessage(id, inputMsg);
+            await delay(100);
+            await this.openChat(id);
+        }
     }
 
     async setupEvents() {
@@ -1982,7 +2049,31 @@ class App {
             await this.generateSideMiddleCtn(data.data);
         });
 
+        this.ws.on("messageResponse", async (data) => {
+            console.log(data);
+        });
+
+        this.ws.on("stream", async (data) => {
+            this.displayStreamedMessage(data.content);
+        });
+
+        this.ws.on("stream_end", async (data) => {
+            this.contentStreamed = null;
+            this.lastMessageElement = null;
+        });
+
         this.ws.getDataChats();
+
+        this.get("ai-input-button-bar-right-send-btn").on("click", async () => {
+            const inputMsg = this.get("ai-input-chat-input").getValue();
+            if (inputMsg === "") {
+                return;
+            } else {
+                await this.sendMessage(inputMsg);
+                await delay(100);
+                this.ws.getDataChats();
+            }
+        });
     }
 }
 

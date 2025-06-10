@@ -223,7 +223,7 @@
     .content
     .tabs {
     position: relative;
-    background-color: #0f0f0f;
+    background-color: hsl(var(--background) / 1);
     border-radius: 0.75rem;
     overflow: hidden;
     flex-direction: column;

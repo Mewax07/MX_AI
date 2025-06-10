@@ -4,7 +4,10 @@ const fs = require("fs");
 const pkg = require("../../../package.json");
 const { ConversationSummaryBufferMemory } = require("langchain/memory");
 const { ConversationChain } = require("langchain/chains");
-const { ChatPromptTemplate } = require("@langchain/core/prompts");
+const {
+    ChatPromptTemplate,
+    PromptTemplate,
+} = require("@langchain/core/prompts");
 const {
     CheerioWebBaseLoader,
 } = require("@langchain/community/document_loaders/web/cheerio");
@@ -33,6 +36,79 @@ if (!fs.existsSync(rootDir)) fs.mkdirSync(rootDir);
 if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir);
 if (!fs.existsSync(conversationsDir)) fs.mkdirSync(conversationsDir);
 
+const systemPrompt = `
+Tu es une IA qui doit répondre avec la syntaxe personnalisée suivante. Voici la description complète de cette syntaxe :
+
+---
+
+Tu es une IA qui doit répondre avec la syntaxe personnalisée suivante. Voici la description complète de cette syntaxe :
+
+---
+
+**Syntaxe personnalisée utilisée :**
+
+1. Sections repliables (Closable) :
+   \`/[Closable: title='TITRE']\\\` crée un bloc repliable avec un titre sans espaces, en MAJUSCULES.
+   Le contenu à l’intérieur est **écrit ligne par ligne**, sans sauts de ligne doubles.
+   Chaque ligne **commence par une lettre majuscule**.
+   Exemple :
+   /[Closable: title='INSTALLATION']\\
+   Installer Avec Npm : \`npm install -g pawnote\`  
+   Installer Avec Yarn : \`yarn global add pawnote\`  
+   Installer Avec Pnpm : \`pnpm i -g pawnote\`  
+   Installer Avec Bun : \`bun init -g pawnote\`
+
+2. Titres Markdown :
+   \`##\` pour titre niveau 2, \`###\` pour niveau 3, etc.
+
+3. Listes :
+   \`-\` pour listes à puces, \`1.\` pour listes numérotées, avec indentations possibles.
+   Tu dois prendre l’initiative de structurer les éléments pertinents en listes lorsque cela est utile.
+
+4. Formatage de texte :
+   - **gras** : \`**texte**\`
+   - *italique* : \`*texte*\`
+   - ~~barré~~ : \`~~texte~~\`
+   - \`code\` : \`\` \`texte\` \`\`
+
+5. Citations :
+   Utilise \`>\` en début de ligne pour citation.
+
+6. Liens :
+   Utilise \`[texte](lien)\` pour créer un lien.
+
+7. Blocs de code et onglets (Tabs) :
+   Onglets créés avec \`/[Tabs: items={{'js', 'ts'}}]\\\`, suivis de blocs de code avec tabulations.
+   Exemple :
+   \`\`\`javascript tab="js"
+   // code JS
+   \`\`\`
+   \`\`\`javascript tab="ts"
+   // code TS
+   \`\`\`
+
+   Ici c'est très délicat et important!
+   Il faut absolument respecter la syntaxe pour que le rendu soit correct.
+   Il faut d'abord déclarer un bloc custom avec \`/[Tabs: items={{'js', 'ts'}}]\\\`,
+   Puis ajouter les différents blocs de code avec leur tabulation respectives.
+   Il faut absolument qu'il n'y ai pas de "\\n" entre les "\`\`\`" et la tabulation.
+   Il faut absolument que tout ce qui ce trouve en dessous du /[Tabs: items={{'js', 'ts'}}] soit un bloc de code "\`\`\`" et rien d'autre.
+   Utilise cette syntaxe pour lister un même script dans différents langages.
+
+8. Cartes (Cards) :
+   \`/[Card: title='Titre' href='URL']\\\` crée une carte cliquable avec un titre et une URL.
+
+9. Séparateurs :
+   \`---\` crée une ligne horizontale.
+
+---
+
+Respecte toujours **scrupuleusement** cette syntaxe dans tes réponses pour que l’affichage fonctionne correctement.
+
+---
+
+Si tu as besoin d’un rappel de cette syntaxe, demande-moi.`;
+
 class Ollama {
     constructor(websocket) {
         this.models = [];
@@ -58,6 +134,11 @@ class Ollama {
         this.initTemplates();
         this.initTools();
         this.initPrompts();
+        this.websocket.on("connection", (ws) => {
+            console.log("Client connected");
+
+            this.ws = ws;
+        });
     }
 
     initModels() {
@@ -136,6 +217,7 @@ Réponse:
             title: initialMessage,
             content: [],
             llm: "gemma2:2b",
+            lastDate: new Date().toISOString(),
         };
 
         fs.writeFileSync(filePath, JSON.stringify(conversationData, null, 2));
@@ -169,13 +251,46 @@ Réponse:
         const conversationData = JSON.parse(fileData);
 
         const memory = new ConversationSummaryBufferMemory({
-            llm: new ChatOllama({ model: conversationData.llm }),
+            llm: new ChatOllama({
+                model: conversationData.llm,
+                callbacks: [
+                    {
+                        handleLLMNewToken: (token) => {
+                            if (this.ws) {
+                                this.ws.send(
+                                    JSON.stringify({
+                                        type: "stream",
+                                        content: token,
+                                    }),
+                                );
+                            }
+                        },
+                        handleLLMEnd: () => {
+                            this.isBusy = false;
+                            if (this.ws) {
+                                this.ws.send(
+                                    JSON.stringify({
+                                        type: "stream_end",
+                                        content: "eof",
+                                    }),
+                                );
+                            }
+                        },
+                    },
+                ],
+            }),
             returnMessages: true,
         });
 
         const conversationChain = new ConversationChain({
-            llm: new ChatOllama({ model: conversationData.llm }),
+            llm: new ChatOllama({
+                model: conversationData.llm,
+            }),
             memory: memory,
+            prompt: new PromptTemplate({
+                template: `${systemPrompt}\n{input}`,
+                inputVariables: ["input"],
+            }),
         });
 
         for (const msg of conversationData.content) {
@@ -203,7 +318,7 @@ Réponse:
 
         const filePath = path.join(conversationsDir, `${chatId}.json`);
         if (!fs.existsSync(filePath)) {
-            throw new Error("Conversation non trouvée");
+            await this.createConversation(chatId, content);
         }
 
         this.isBusy = true;
@@ -217,8 +332,36 @@ Réponse:
                 content,
                 timestamp: new Date().toISOString(),
             });
+            conversationData.lastDate = new Date().toISOString();
 
-            const llm = new ChatOllama({ model: conversationData.llm });
+            const llm = new ChatOllama({
+                model: conversationData.llm,
+                callbacks: [
+                    {
+                        handleLLMNewToken: (token) => {
+                            if (this.ws) {
+                                this.ws.send(
+                                    JSON.stringify({
+                                        type: "stream",
+                                        content: token,
+                                    }),
+                                );
+                            }
+                        },
+                        handleLLMEnd: () => {
+                            this.isBusy = false;
+                            if (this.ws) {
+                                this.ws.send(
+                                    JSON.stringify({
+                                        type: "stream_end",
+                                        content: "eof",
+                                    }),
+                                );
+                            }
+                        },
+                    },
+                ],
+            });
 
             const memory = new ConversationSummaryBufferMemory({
                 llm,
@@ -233,10 +376,11 @@ Réponse:
                 if (searchTool) {
                     const prompt = ChatPromptTemplate.fromTemplate(
                         searchTool.prompt,
+                        systemPrompt,
                     );
 
                     const chain = await createStuffDocumentsChain({
-                        prompt,
+                        prompt: prompt,
                         llm,
                         documents: [],
                         documentPrompt: ChatPromptTemplate.fromTemplate(
@@ -364,6 +508,7 @@ Réponse:
                         content: parsedResponse,
                         timestamp: new Date().toISOString(),
                     });
+                    conversationData.lastDate = new Date().toISOString();
 
                     fs.writeFileSync(
                         filePath,
@@ -373,8 +518,39 @@ Réponse:
                     return parsedResponse;
                 } else {
                     const chain = new ConversationChain({
-                        llm: new ChatOllama({ model: conversationData.llm }),
+                        llm: new ChatOllama({
+                            model: conversationData.llm,
+                            callbacks: [
+                                {
+                                    handleLLMNewToken: (token) => {
+                                        if (this.ws) {
+                                            this.ws.send(
+                                                JSON.stringify({
+                                                    type: "stream",
+                                                    content: token,
+                                                }),
+                                            );
+                                        }
+                                    },
+                                    handleLLMEnd: () => {
+                                        this.isBusy = false;
+                                        if (this.ws) {
+                                            this.ws.send(
+                                                JSON.stringify({
+                                                    type: "stream_end",
+                                                    content: "eof",
+                                                }),
+                                            );
+                                        }
+                                    },
+                                },
+                            ],
+                        }),
                         memory: memory,
+                        prompt: new PromptTemplate({
+                            template: `${systemPrompt}\n{input}`,
+                            inputVariables: ["input"],
+                        }),
                     });
 
                     for (const msg of conversationData.content) {
@@ -394,6 +570,7 @@ Réponse:
                         content: response.response,
                         timestamp: new Date().toISOString(),
                     });
+                    conversationData.lastDate = new Date().toISOString();
 
                     fs.writeFileSync(
                         filePath,
@@ -404,8 +581,39 @@ Réponse:
                 }
             } else {
                 const chain = new ConversationChain({
-                    llm: new ChatOllama({ model: conversationData.llm }),
+                    llm: new ChatOllama({
+                        model: conversationData.llm,
+                        callbacks: [
+                            {
+                                handleLLMNewToken: (token) => {
+                                    if (this.ws) {
+                                        this.ws.send(
+                                            JSON.stringify({
+                                                type: "stream",
+                                                content: token,
+                                            }),
+                                        );
+                                    }
+                                },
+                                handleLLMEnd: () => {
+                                    this.isBusy = false;
+                                    if (this.ws) {
+                                        this.ws.send(
+                                            JSON.stringify({
+                                                type: "stream_end",
+                                                content: "eof",
+                                            }),
+                                        );
+                                    }
+                                },
+                            },
+                        ],
+                    }),
                     memory: memory,
+                    prompt: new PromptTemplate({
+                        template: `${systemPrompt}\n{input}`,
+                        inputVariables: ["input"],
+                    }),
                 });
 
                 for (const msg of conversationData.content) {
@@ -423,6 +631,7 @@ Réponse:
                     content: response.response,
                     timestamp: new Date().toISOString(),
                 });
+                conversationData.lastDate = new Date().toISOString();
 
                 fs.writeFileSync(
                     filePath,

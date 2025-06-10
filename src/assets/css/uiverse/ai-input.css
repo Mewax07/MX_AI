@@ -10,6 +10,25 @@
     z-index: 10;
 }
 
+.main-ctn .main-content .ai-input.static {
+    position: absolute;
+    bottom: 0.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.main-ctn .main-content .ai-input.static #chat-input {
+    max-height: 3rem !important;
+}
+
+.main-ctn .main-content .ai-input.static .chat-wrapper {
+    padding: 0.5rem !important;
+}
+
+.main-ctn .main-content .ai-input.static .button-bar {
+    margin: 0 !important;
+}
+
 .main-ctn .main-content #voice {
     display: none;
 
